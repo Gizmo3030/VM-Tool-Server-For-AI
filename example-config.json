@@ -1,0 +1,5 @@
+{
+    "esxi_host_ip": "127.0.0.1",
+    "esxi_username": "username",
+    "esxi_password": "password"
+}

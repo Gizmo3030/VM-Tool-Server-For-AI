@@ -4,6 +4,7 @@ import paramiko
 import logging
 import os # For resolving home directory in SSH key path
 import ssl
+import json
 
 # Import pyVmomi components
 from pyVim import connect
@@ -41,7 +42,6 @@ class ESXiVMDiscoveryConfig(BaseModel):
         esxi_password (str): Password for ESXi/vCenter authentication.
         vm_name (str): The exact name of the VM to search for.
     """
-
     esxi_host_ip: str
     esxi_username: str
     esxi_password: str
@@ -49,7 +49,19 @@ class ESXiVMDiscoveryConfig(BaseModel):
 
 # --- Helper for SSH Commands (Ubuntu VM interactions) ---
 def run_ssh_command(vm_config: VMConfig, command: str) -> str:
-    """Helper function to run a command over SSH."""
+    """
+    Executes a shell command on a remote Linux VM over SSH using Paramiko.
+
+    Args:
+        vm_config (VMConfig): SSH connection details.
+        command (str): The shell command to execute.
+
+    Returns:
+        str: The command's standard output.
+
+    Raises:
+        HTTPException: For authentication, SSH, or file errors.
+    """
     client = paramiko.SSHClient()
     client.load_system_host_keys()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy()) 
@@ -92,17 +104,21 @@ def run_ssh_command(vm_config: VMConfig, command: str) -> str:
         client.close()
 
 # --- ESXi/vCenter VM Discovery Endpoint ---
+class VMNameRequest(BaseModel):
+    vm_name: str
+
 @app.post("/esxi/get_linux_vm_ip")
-async def get_linux_vm_ip_from_esxi(config: ESXiVMDiscoveryConfig):
+async def get_linux_vm_ip_from_esxi(request: VMNameRequest):
     """
-    Connects to an ESXi host or vCenter Server to find a specific Linux VM by name
-    and retrieve its IP address.
+    Looks up a Linux VM by name on an ESXi/vCenter server and returns its IP address.
+
+    Loads ESXi connection details from config.json.
 
     Request Body:
-        config (ESXiVMDiscoveryConfig): Connection and search parameters.
+        vm_name (str): The exact name of the VM to search for.
 
     Returns:
-        JSON object with VM name, IP address, and guest OS if found.
+        JSON object with VM name, IP address, guest OS, and power state.
 
     Errors:
         400: VM found but is not a Linux VM.
@@ -110,6 +126,21 @@ async def get_linux_vm_ip_from_esxi(config: ESXiVMDiscoveryConfig):
         404: VM not found or no IP address reported.
         500: Connection or retrieval error.
     """
+    # Load ESXi config from config.json
+    try:
+        with open("config.json") as f:
+            esxi_config = json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to load config.json: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load ESXi config from config.json")
+
+    config = ESXiVMDiscoveryConfig(
+        esxi_host_ip=esxi_config["esxi_host_ip"],
+        esxi_username=esxi_config["esxi_username"],
+        esxi_password=esxi_config["esxi_password"],
+        vm_name=request.vm_name
+    )
+
     logging.info(f"Attempting to connect to ESXi/vCenter at {config.esxi_host_ip} to find VM: {config.vm_name}")
     service_instance = None
     try:
@@ -160,7 +191,8 @@ async def get_linux_vm_ip_from_esxi(config: ESXiVMDiscoveryConfig):
                     "status": "success",
                     "vm_name": found_vm.name,
                     "ip_address": ip_address,
-                    "guest_os": found_vm.summary.guest.guestFullName
+                    "guest_os": found_vm.summary.guest.guestFullName,
+                    "powerState": found_vm.summary.runtime.powerState
                 }
             else:
                 logging.warning(f"VM '{found_vm.name}' found, but no IP address reported by VMware Tools.")
@@ -179,11 +211,11 @@ async def get_linux_vm_ip_from_esxi(config: ESXiVMDiscoveryConfig):
         if service_instance:
             connect.Disconnect(service_instance) # Disconnect from vCenter [1]
 
-# --- Ubuntu VM Upgrade Endpoints (Same as before) ---
+# --- Ubuntu VM Upgrade Endpoints ---
 @app.post("/vm/check_upgrades")
 async def check_vm_upgrades(vm_config: VMConfig):
     """
-    Checks for available upgrades on a specified Ubuntu Linux VM using apt.
+    Checks for available package upgrades on a specified Ubuntu Linux VM using apt.
 
     Request Body:
         vm_config (VMConfig): SSH connection details for the target VM.
@@ -218,7 +250,7 @@ async def check_vm_upgrades(vm_config: VMConfig):
 @app.post("/vm/apply_upgrades")
 async def apply_vm_upgrades(vm_config: VMConfig):
     """
-    Applies all available upgrades on a specified Ubuntu Linux VM using apt.
+    Applies all available package upgrades on a specified Ubuntu Linux VM using apt.
 
     Request Body:
         vm_config (VMConfig): SSH connection details for the target VM.

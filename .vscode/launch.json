@@ -12,9 +12,14 @@
             "module": "uvicorn",
             "args": [
                 "vm_update_tool_server:app",
-                "--reload"
+                "--reload",
+                "--host",
+                "${env:TOOL_SERVER_HOST}"
             ],
-            "jinja": true
+            "jinja": true,
+            "env": {
+                "TOOL_SERVER_HOST": "127.0.0.1"
+            }
         }
     ]
 }
