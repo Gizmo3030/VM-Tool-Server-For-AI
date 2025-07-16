@@ -3,6 +3,7 @@ from pydantic import BaseModel
 import paramiko
 import logging
 import os # For resolving home directory in SSH key path
+import ssl
 
 # Import pyVmomi components
 from pyVim import connect
@@ -112,16 +113,23 @@ async def get_linux_vm_ip_from_esxi(config: ESXiVMDiscoveryConfig):
     logging.info(f"Attempting to connect to ESXi/vCenter at {config.esxi_host_ip} to find VM: {config.vm_name}")
     service_instance = None
     try:
-        # Connect to the vCenter Server or ESXi host [1]
-        service_instance = connect.SmartConnectNoSSL(
-            host=config.esxi_host_ip,
-            user=config.esxi_username,
-            pwd=config.esxi_password
-        )
-        if not service_instance:
-            raise HTTPException(status_code=500, detail="Failed to connect to ESXi/vCenter Server.")
+        try:
+            # Use SmartConnect with an unverified SSL context
+            context = ssl._create_unverified_context()
+            service_instance = connect.SmartConnect(
+                host=config.esxi_host_ip,
+                user=config.esxi_username,
+                pwd=config.esxi_password,
+                sslContext=context
+            )
+            logging.info(f"Service instance: {service_instance} (type: {type(service_instance)})")
+            if not service_instance:
+                raise HTTPException(status_code=500, detail="Failed to connect to ESXi/vCenter Server.")
+        except Exception as e:
+            logging.error(f"Error connecting to ESXi/vCenter: {e}")
+            raise HTTPException(status_code=500, detail=f"Error connecting to ESXi/vCenter: {e}")
 
-        content = service_instance.RetrieveContent()
+        content = service_instance.RetrieveContent() # Retrieve the content of the service instance [1]
 
         # Get a list of all VMs [1]
         vm_view = content.viewManager.CreateContainerView(
@@ -161,7 +169,7 @@ async def get_linux_vm_ip_from_esxi(config: ESXiVMDiscoveryConfig):
             logging.warning(f"VM '{config.vm_name}' not found on ESXi/vCenter.")
             raise HTTPException(status_code=404, detail=f"VM '{config.vm_name}' not found on ESXi/vCenter.")
 
-    except connect.NoPermission as e:
+    except vim.fault.NoPermission as e:
         logging.error(f"Permission error connecting to ESXi/vCenter: {e}")
         raise HTTPException(status_code=403, detail=f"Permission denied for ESXi/vCenter. Check credentials and user roles.")
     except Exception as e:
