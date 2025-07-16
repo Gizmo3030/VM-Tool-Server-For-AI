@@ -274,3 +274,64 @@ async def apply_vm_upgrades(vm_config: VMConfig):
     except Exception as e:
         logging.error(f"An unexpected error occurred during apt upgrade application: {e}")
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred during apt upgrade application: {e}")
+
+@app.get("/esxi/list_powered_on_vms")
+async def list_powered_on_vms():
+    """
+    Returns a list of all VMs that are currently powered on from the ESXi/vCenter server.
+
+    Loads ESXi connection details from config.json.
+
+    Returns:
+        JSON object with a list of powered-on VMs, each including name, IP address, guest OS, and power state.
+
+    Errors:
+        403: Permission denied on ESXi/vCenter.
+        500: Connection or retrieval error.
+    """
+    try:
+        with open("config.json") as f:
+            esxi_config = json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to load config.json: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load ESXi config from config.json")
+
+    service_instance = None
+    try:
+        context = ssl._create_unverified_context()
+        service_instance = connect.SmartConnect(
+            host=esxi_config["esxi_host_ip"],
+            user=esxi_config["esxi_username"],
+            pwd=esxi_config["esxi_password"],
+            sslContext=context
+        )
+        content = service_instance.RetrieveContent()
+        vm_view = content.viewManager.CreateContainerView(
+            content.rootFolder, [vim.VirtualMachine], True
+        )
+        vms = vm_view.view
+
+        powered_on_vms = []
+        for vm in vms:
+            power_state = vm.summary.runtime.powerState
+            if power_state == "poweredOn":
+                guest_os = vm.summary.guest.guestFullName if vm.summary.guest else "Unknown"
+                ip_address = vm.summary.guest.ipAddress if vm.summary.guest else None
+                powered_on_vms.append({
+                    "vm_name": vm.name,
+                    "ip_address": ip_address,
+                    "guest_os": guest_os,
+                    "powerState": power_state
+                })
+
+        return {"status": "success", "powered_on_vms": powered_on_vms}
+
+    except vim.fault.NoPermission as e:
+        logging.error(f"Permission error connecting to ESXi/vCenter: {e}")
+        raise HTTPException(status_code=403, detail="Permission denied for ESXi/vCenter. Check credentials and user roles.")
+    except Exception as e:
+        logging.error(f"Error retrieving powered-on VMs: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve powered-on VMs: {e}")
+    finally:
+        if service_instance:
+            connect.Disconnect(service_instance)
