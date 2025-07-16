@@ -18,11 +18,29 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # --- Models for Request Bodies ---
 class VMConfig(BaseModel):
+    """
+    Model for specifying SSH connection details to a Linux VM.
+
+    Attributes:
+        ip_address (str): The IP address of the target VM.
+        username (str): The SSH username to use for connecting.
+        ssh_key_path (str): Path to the SSH private key file (default: ~/.ssh/openwebui_vm_key).
+    """
     ip_address: str
     username: str
     ssh_key_path: str = "~/.ssh/openwebui_vm_key" # Default path for SSH key
 
 class ESXiVMDiscoveryConfig(BaseModel):
+    """
+    Model for specifying ESXi/vCenter connection and VM search parameters.
+
+    Attributes:
+        esxi_host_ip (str): IP address of the ESXi host or vCenter server.
+        esxi_username (str): Username for ESXi/vCenter authentication.
+        esxi_password (str): Password for ESXi/vCenter authentication.
+        vm_name (str): The exact name of the VM to search for.
+    """
+
     esxi_host_ip: str
     esxi_username: str
     esxi_password: str
@@ -78,6 +96,18 @@ async def get_linux_vm_ip_from_esxi(config: ESXiVMDiscoveryConfig):
     """
     Connects to an ESXi host or vCenter Server to find a specific Linux VM by name
     and retrieve its IP address.
+
+    Request Body:
+        config (ESXiVMDiscoveryConfig): Connection and search parameters.
+
+    Returns:
+        JSON object with VM name, IP address, and guest OS if found.
+
+    Errors:
+        400: VM found but is not a Linux VM.
+        403: Permission denied on ESXi/vCenter.
+        404: VM not found or no IP address reported.
+        500: Connection or retrieval error.
     """
     logging.info(f"Attempting to connect to ESXi/vCenter at {config.esxi_host_ip} to find VM: {config.vm_name}")
     service_instance = None
@@ -145,8 +175,16 @@ async def get_linux_vm_ip_from_esxi(config: ESXiVMDiscoveryConfig):
 @app.post("/vm/check_upgrades")
 async def check_vm_upgrades(vm_config: VMConfig):
     """
-    Checks for available *upgrades* on a specified Ubuntu Linux VM using apt.
-    Identifies if installed packages can be upgraded to newer versions.
+    Checks for available upgrades on a specified Ubuntu Linux VM using apt.
+
+    Request Body:
+        vm_config (VMConfig): SSH connection details for the target VM.
+
+    Returns:
+        JSON object indicating if upgrades are available, and details of upgradable packages.
+
+    Errors:
+        500: SSH or command execution error.
     """
     logging.info(f"Checking for upgrades on Ubuntu VM: {vm_config.ip_address} ({vm_config.username}) using apt.")
     
@@ -172,8 +210,16 @@ async def check_vm_upgrades(vm_config: VMConfig):
 @app.post("/vm/apply_upgrades")
 async def apply_vm_upgrades(vm_config: VMConfig):
     """
-    Applies all available *upgrades* on a specified Ubuntu Linux VM using apt.
-    This will install newer versions of existing packages.
+    Applies all available upgrades on a specified Ubuntu Linux VM using apt.
+
+    Request Body:
+        vm_config (VMConfig): SSH connection details for the target VM.
+
+    Returns:
+        JSON object indicating success or if no upgrades were applied, with command output details.
+
+    Errors:
+        500: SSH or command execution error.
     """
     logging.info(f"Applying upgrades on Ubuntu VM: {vm_config.ip_address} ({vm_config.username}) using apt.")
     
