@@ -4,8 +4,9 @@ This project provides an OpenAPI-compatible tool server to extend Open WebUI's c
 
 The tool server can:
 1.  **Discover Ubuntu VMs by Name:** Connect to your ESXi/vCenter to find a specific VM by its name and retrieve its current IP address.
-2.  **Check for Upgrades:** Connect to a specified Ubuntu VM via SSH to check for available software upgrades using `apt`.
-3.  **Apply Upgrades:** Apply all pending software upgrades on a specified Ubuntu VM via SSH using `apt`.
+2.  **List Powered-On VMs:** List all VMs that are currently powered on, including their names, IPs, guest OS, and power state.
+3.  **Check for Upgrades:** Connect to a specified Ubuntu VM via SSH to check for available software upgrades using `apt`.
+4.  **Apply Upgrades:** Apply all pending software upgrades on a specified Ubuntu VM via SSH using `apt`.
 
 This enables a conversational flow where you can simply tell your chatbot, "Hey, update my OpenVPN server," and it will handle the discovery and update process automatically.
 
@@ -19,13 +20,14 @@ This enables a conversational flow where you can simply tell your chatbot, "Hey,
     -   [3. SSH Key Setup (for VM Access)](#3-ssh-key-setup-for-vm-access)
     -   [4. Run the Tool Server](#4-run-the-tool-server)
 -   [Open WebUI Integration](#open-webui-integration)
--   [How to Use with Open WebUI Chatbot](#how-to-use-with-open-webui-chatbot)
+-   [How to Use with Open WebUI Chatbot](#how-to-use-with-openwebui-chatbot)
 -   [Important Considerations & Security](#important-considerations--security)
 -   [Troubleshooting](#troubleshooting)
 
 ## Features
 
 *   **VM Discovery:** Locate Ubuntu VMs by name on your ESXi/vCenter server and retrieve their IP addresses automatically.
+*   **List Powered-On VMs:** Get a list of all powered-on VMs, including their names, IPs, guest OS, and power state.
 *   **Intelligent Upgrade Check:** Query specific Ubuntu VMs for available `apt` upgrades.
 *   **Automated Upgrade Application:** Initiate `apt upgrade` remotely on your Ubuntu VMs.
 *   **Seamless Chatbot Integration:** Leverage Open WebUI's tool calling feature for natural language commands.
@@ -67,8 +69,8 @@ Ensure you have your project directory containing the following files:
 
 *   `vm_update_tool_server.py`
 *   `requirements.txt`
-
-*(These files contain the Python FastAPI application and its dependencies, respectively, as provided in previous instructions.)*
+*   `config.json` (see `example-config.json` for format)
+*   `openai.json` (see `example-openai.json` for format)
 
 ### 2. Create a Virtual Environment & Install Dependencies
 
@@ -82,12 +84,7 @@ cd /path/to/your/vm-tool-server
 python3 -m venv venv
 
 # Activate the virtual environment
-# On Linux/macOS:
 source venv/bin/activate
-# On Windows (cmd.exe):
-.\venv\Scripts\activate.bat
-# On Windows (PowerShell):
-.\venv\Scripts\Activate.ps1
 
 # Install the required Python packages
 pip install -r requirements.txt
@@ -119,6 +116,10 @@ With the virtual environment active, start the FastAPI server:
 uvicorn vm_update_tool_server:app --host 0.0.0.0 --port 8000
 ```
 
+Or use the provided VS Code debug configuration (see `.vscode/launch.json`):
+
+- The server will use the `TOOL_SERVER_HOST` environment variable for the host IP.
+
 *   `--host 0.0.0.0`: Makes the server accessible from any network interface.
 *   `--port 8000`: Runs the server on port 8000.
 *   For development, you can add `--reload` to automatically restart on code changes. Remove it for production.
@@ -139,7 +140,7 @@ Now, connect your running tool server to Open WebUI. Requests from Global Tool S
     *   If the tool server is on a *different machine* with a known IP: `http://[YOUR_TOOL_SERVER_IP]:8000`
 5.  **Save**: Click "Save".
 
-The tool server should now be registered and its functionalities (`/esxi/get_linux_vm_ip`, `/vm/check_upgrades`, `/vm/apply_upgrades`) will be exposed to your LLM.
+The tool server should now be registered and its functionalities (`/esxi/get_linux_vm_ip`, `/esxi/list_powered_on_vms`, `/vm/check_upgrades`, `/vm/apply_upgrades`) will be exposed to your LLM.
 
 ## How to Use with Open WebUI Chatbot
 
@@ -154,37 +155,38 @@ Global tools are hidden by default and need to be activated per user/chat.
 
 You can now interact with your chatbot naturally. The LLM will determine which tool to use and what information it needs.
 
-**Scenario: Update OpenVPN Server VM**
+**Scenario: List Powered-On VMs**
 
-1.  **You:** "Hey, can you help me update my OpenVPN server? It's an Ubuntu VM on my ESXi host at `192.168.1.50`. The ESXi login is `root` with password `MySecureEsxiPass123`."
-    *   *(Initially, you might need to provide ESXi credentials in the prompt. For production, consider other methods for secure credential handling).*
-
-2.  **Chatbot (after initial prompt):** "Okay, I understand you want to update your OpenVPN server VM. I'll need to locate it on your ESXi host first. Could you please provide the exact name of the OpenVPN server VM as it appears in your ESXi/vCenter inventory? Also, what is the SSH username for that Ubuntu VM (e.g., `ubuntu` or `yourusername`)?"
-    *   *(The LLM knows it needs the VM name for discovery and SSH username for later SSH commands.)*
-
-3.  **You:** "The VM name is exactly `OpenVPN-Server-Prod` and the SSH username is `ubuntu`."
-
-4.  **Chatbot (Internal Action - Calls `/esxi/get_linux_vm_ip`):**
-    ```json
-    {
-      "esxi_host_ip": "192.168.1.50",
-      "esxi_username": "root",
-      "esxi_password": "MySecureEsxiPass123",
-      "vm_name": "OpenVPN-Server-Prod"
-    }
-    ```
-    **Tool Server Response (Example):**
+1.  **You:** "Show me all powered-on VMs on my ESXi host."
+2.  **Chatbot (Internal Action - Calls `/esxi/list_powered_on_vms`):**
     ```json
     {
       "status": "success",
-      "vm_name": "OpenVPN-Server-Prod",
-      "ip_address": "192.168.1.100",
-      "guest_os": "Ubuntu Linux (64-bit)"
+      "powered_on_vms": [
+        {
+          "vm_name": "OpenVPN-Server-Prod",
+          "ip_address": "192.168.1.100",
+          "guest_os": "Ubuntu Linux (64-bit)",
+          "powerState": "poweredOn"
+        },
+        ...
+      ]
     }
     ```
+3.  **Chatbot (To You):** "Here are your powered-on VMs: ..."
 
-5.  **Chatbot (To You):** "Great! I found the VM `OpenVPN-Server-Prod` with IP address `192.168.1.100`. I will now check if there are any upgrades available for it."
+**Scenario: Update OpenVPN Server VM**
 
+1.  **You:** "Hey, can you help me update my OpenVPN server? It's an Ubuntu VM on my ESXi host at `192.168.1.50`. The ESXi login is `root` with password `MySecureEsxiPass123`."
+2.  **Chatbot:** "Please provide the exact name of the OpenVPN server VM and the SSH username."
+3.  **You:** "The VM name is exactly `OpenVPN-Server-Prod` and the SSH username is `ubuntu`."
+4.  **Chatbot (Internal Action - Calls `/esxi/get_linux_vm_ip`):**
+    ```json
+    {
+      "vm_name": "OpenVPN-Server-Prod"
+    }
+    ```
+5.  **Chatbot (To You):** "Found the VM with IP address `192.168.1.100`. Checking for upgrades..."
 6.  **Chatbot (Internal Action - Calls `/vm/check_upgrades`):**
     ```json
     {
@@ -193,19 +195,8 @@ You can now interact with your chatbot naturally. The LLM will determine which t
       "ssh_key_path": "~/.ssh/openwebui_vm_key"
     }
     ```
-    **Tool Server Response (Example):**
-    ```json
-    {
-      "status": "upgrades_available",
-      "package_manager": "apt",
-      "details": "Found the following upgradable packages via apt:\n  nginx-common/jammy-updates 1.18.0-0ubuntu1.4 amd64 [upgradable from: 1.18.0-0ubuntu1.3]\n  python3/jammy-updates 3.9.5-3ubuntu1.2 amd64 [upgradable from: 3.9.5-3ubuntu1.1]"
-    }
-    ```
-
-7.  **Chatbot (To You):** "It looks like there are upgrades available for your OpenVPN server on `192.168.1.100`. Specifically, `nginx-common` and `python3` can be upgraded. Would you like me to proceed with applying these upgrades?"
-
-8.  **You:** "Yes, please apply the upgrades."
-
+7.  **Chatbot (To You):** "Upgrades available: ... Would you like to apply them?"
+8.  **You:** "Yes."
 9.  **Chatbot (Internal Action - Calls `/vm/apply_upgrades`):**
     ```json
     {
@@ -214,21 +205,11 @@ You can now interact with your chatbot naturally. The LLM will determine which t
       "ssh_key_path": "~/.ssh/openwebui_vm_key"
     }
     ```
-    **Tool Server Response (Example - Truncated for brevity):**
-    ```json
-    {
-      "status": "success",
-      "package_manager": "apt",
-      "details": "Reading package lists...\nBuilding dependency tree...\nReading state information...\nCalculating upgrade...\nThe following packages will be upgraded:\n  nginx-common python3\n2 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\nNeed to get 2,154 kB of archives.\nAfter this operation, 10.2 kB of additional disk space will be used.\nGet:1 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 nginx-common all 1.18.0-0ubuntu1.4 [1,023 kB]\n..."
-    }
-    ```
-
-10. **Chatbot (To You):** "The upgrades have been successfully applied to your OpenVPN server (`192.168.1.100`). The process is complete!"
+10. **Chatbot (To You):** "Upgrades applied successfully!"
 
 ## Important Considerations & Security
 
-*   **ESXi/vCenter Credentials**: The current setup involves passing your ESXi/vCenter username and password directly through the chatbot to the tool server.
-    *   **⚠️ For production environments, this is NOT recommended.** Consider loading these credentials as environment variables directly on the tool server's machine and removing them from the API request body. This way, the LLM wouldn't directly handle them. However, for a simple chatbot integration, passing them once via prompt is a common demo pattern.
+*   **ESXi/vCenter Credentials**: The current setup involves loading ESXi/vCenter credentials from `config.json`. For production, secure this file and restrict access.
 *   **SSH Key Security**: The SSH key without a passphrase (`~/.ssh/openwebui_vm_key`) grants access to your VMs.
     *   Ensure the host running the tool server is secured.
     *   Set strict file permissions on the private key (`chmod 600 ~/.ssh/openwebui_vm_key`).
@@ -247,7 +228,7 @@ You can now interact with your chatbot naturally. The LLM will determine which t
     *   Try restarting the Open WebUI Docker container (if applicable).
     *   Check the tool server's console for any startup errors.
 *   **"Failed to connect to ESXi/vCenter Server." / "Authentication failed for ESXi/vCenter."**:
-    *   Verify the `esxi_host_ip`, `esxi_username`, and `esxi_password` are correct.
+    *   Verify the `esxi_host_ip`, `esxi_username`, and `esxi_password` in `config.json` are correct.
     *   Ensure the ESXi/vCenter user has the necessary permissions (at least Read-only).
     *   Check network connectivity from the tool server machine to your ESXi host/vCenter (e.g., `ping [esxi_host_ip]`, `nc -vz [esxi_host_ip] 443`).
 *   **"VM not found" / "No IP address reported."**:
