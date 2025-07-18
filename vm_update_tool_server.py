@@ -5,6 +5,8 @@ import logging
 import os # For resolving home directory in SSH key path
 import ssl
 import json
+from contextlib import contextmanager
+from typing import List, Dict, Optional
 
 # Import pyVmomi components
 from pyVim import connect
@@ -14,6 +16,10 @@ app = FastAPI(
     title="VM Management and Upgrade Tool Server", # Updated title
     description="Tooling for discovering VMs on ESXi/vCenter and managing upgrades on Ubuntu Linux VMs via SSH."
 )
+
+class PoweredOnVMsResponse(BaseModel):
+    status: str
+    powered_on_vms: List[Dict[str, Optional[str]]]
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -106,6 +112,91 @@ def run_ssh_command(vm_config: VMConfig, command: str) -> str:
 # --- ESXi/vCenter VM Discovery Endpoint ---
 class VMNameRequest(BaseModel):
     vm_name: str
+
+# --- Helper Functions ---
+
+def load_esxi_config() -> dict:
+    try:
+        with open("config.json") as f:
+            return json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to load config.json: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load ESXi config from config.json")
+
+def load_vm_defaults() -> dict:
+    """
+    Loads default VM SSH username and sudo password from config.json.
+    """
+    try:
+        with open("config.json") as f:
+            config = json.load(f)
+            return {
+                "default_vm_username": config.get("default_vm_username", "root"),
+                "default_vm_sudo_password": config.get("default_vm_sudo_password", "password!")
+            }
+    except Exception as e:
+        logging.error(f"Failed to load VM defaults from config.json: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load VM defaults from config.json")
+
+# --- Ubuntu VM Upgrade Endpoints ---
+@app.post("/vm/check_upgrades")
+async def check_vm_upgrades(vm_config: VMConfig):
+    """
+    Checks for available package upgrades on a specified Ubuntu Linux VM using apt.
+    """
+    vm_defaults = load_vm_defaults()
+    logging.info(f"Checking for upgrades on Ubuntu VM: {vm_config.ip_address} (forcing username '{vm_defaults['default_vm_username']}') using apt.")
+
+    # Force username from config
+    vm_config.username = vm_defaults["default_vm_username"]
+    sudo_password = vm_defaults["default_vm_sudo_password"]
+    
+    try:
+        # Provide sudo password non-interactively
+        command = f"echo '{sudo_password}' | sudo -S apt update && apt list --upgradable"
+        apt_output = run_ssh_command(vm_config, command)
+        upgradable_packages = [line for line in apt_output.splitlines() if "upgradable from" in line or "newer is available" in line]
+        
+        if upgradable_packages:
+            return {"status": "upgrades_available", "package_manager": "apt", "details": "Found the following upgradable packages via apt:\n" + "\n".join(upgradable_packages)}
+        else:
+            if "All packages are up to date" in apt_output or "0 packages can be upgraded" in apt_output:
+                return {"status": "no_upgrades", "package_manager": "apt", "details": "No upgradable packages found via apt. System is up-to-date."}
+            else:
+                return {"status": "no_upgrades", "package_manager": "apt", "details": "Apt update ran, but no explicit upgradable packages identified. Your system is likely up-to-date."}
+        
+    except HTTPException as e:
+        logging.error(f"Failed to check upgrades on {vm_config.ip_address} using apt: {e.detail}")
+        raise HTTPException(status_code=500, detail=f"Failed to check upgrades on {vm_config.ip_address} using apt: {e.detail}")
+    except Exception as e:
+        logging.error(f"An unexpected error occurred during apt upgrade check: {e}")
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during apt upgrade check: {e}")
+
+@app.post("/vm/apply_upgrades")
+async def apply_vm_upgrades(vm_config: VMConfig):
+    """
+    Applies all available package upgrades on a specified Ubuntu Linux VM using apt.
+    """
+    vm_defaults = load_vm_defaults()
+    logging.info(f"Applying upgrades on Ubuntu VM: {vm_config.ip_address} (forcing username '{vm_defaults['default_vm_username']}') using apt.")
+
+    # Force username from config
+    vm_config.username = vm_defaults["default_vm_username"]
+    sudo_password = vm_defaults["default_vm_sudo_password"]
+    
+    try:
+        # Provide sudo password non-interactively
+        command = f"echo '{sudo_password}' | sudo -S apt update && echo '{sudo_password}' | sudo -S apt upgrade -y"
+        apt_upgrade_output = run_ssh_command(vm_config, command)
+        if "0 upgraded, 0 newly installed" in apt_upgrade_output or "0 to upgrade, 0 to newly install" in apt_upgrade_output or "0 packages upgraded" in apt_upgrade_output:
+             return {"status": "no_upgrades_applied", "package_manager": "apt", "details": "No new packages were upgraded or installed by apt. System was already up-to-date or no new upgrades were available."}
+        return {"status": "success", "package_manager": "apt", "details": apt_upgrade_output}
+    except HTTPException as e:
+        logging.error(f"Failed to apply upgrades on {vm_config.ip_address} using apt: {e.detail}")
+        raise HTTPException(status_code=500, detail=f"Failed to apply upgrades on {vm_config.ip_address} using apt: {e.detail}")
+    except Exception as e:
+        logging.error(f"An unexpected error occurred during apt upgrade application: {e}")
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during apt upgrade application: {e}")
 
 @app.post("/esxi/get_linux_vm_ip")
 async def get_linux_vm_ip_from_esxi(request: VMNameRequest):
@@ -209,71 +300,7 @@ async def get_linux_vm_ip_from_esxi(request: VMNameRequest):
         raise HTTPException(status_code=500, detail=f"Failed to retrieve VM IP from ESXi/vCenter: {e}")
     finally:
         if service_instance:
-            connect.Disconnect(service_instance) # Disconnect from vCenter [1]
-
-# --- Ubuntu VM Upgrade Endpoints ---
-@app.post("/vm/check_upgrades")
-async def check_vm_upgrades(vm_config: VMConfig):
-    """
-    Checks for available package upgrades on a specified Ubuntu Linux VM using apt.
-
-    Request Body:
-        vm_config (VMConfig): SSH connection details for the target VM.
-
-    Returns:
-        JSON object indicating if upgrades are available, and details of upgradable packages.
-
-    Errors:
-        500: SSH or command execution error.
-    """
-    logging.info(f"Checking for upgrades on Ubuntu VM: {vm_config.ip_address} ({vm_config.username}) using apt.")
-    
-    try:
-        apt_output = run_ssh_command(vm_config, "sudo apt update && apt list --upgradable")
-        upgradable_packages = [line for line in apt_output.splitlines() if "upgradable from" in line or "newer is available" in line]
-        
-        if upgradable_packages:
-            return {"status": "upgrades_available", "package_manager": "apt", "details": "Found the following upgradable packages via apt:\n" + "\n".join(upgradable_packages)}
-        else:
-            if "All packages are up to date" in apt_output or "0 packages can be upgraded" in apt_output:
-                return {"status": "no_upgrades", "package_manager": "apt", "details": "No upgradable packages found via apt. System is up-to-date."}
-            else:
-                return {"status": "no_upgrades", "package_manager": "apt", "details": "Apt update ran, but no explicit upgradable packages identified. Your system is likely up-to-date."}
-        
-    except HTTPException as e:
-        logging.error(f"Failed to check upgrades on {vm_config.ip_address} using apt: {e.detail}")
-        raise HTTPException(status_code=500, detail=f"Failed to check upgrades on {vm_config.ip_address} using apt: {e.detail}")
-    except Exception as e:
-        logging.error(f"An unexpected error occurred during apt upgrade check: {e}")
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during apt upgrade check: {e}")
-
-@app.post("/vm/apply_upgrades")
-async def apply_vm_upgrades(vm_config: VMConfig):
-    """
-    Applies all available package upgrades on a specified Ubuntu Linux VM using apt.
-
-    Request Body:
-        vm_config (VMConfig): SSH connection details for the target VM.
-
-    Returns:
-        JSON object indicating success or if no upgrades were applied, with command output details.
-
-    Errors:
-        500: SSH or command execution error.
-    """
-    logging.info(f"Applying upgrades on Ubuntu VM: {vm_config.ip_address} ({vm_config.username}) using apt.")
-    
-    try:
-        apt_upgrade_output = run_ssh_command(vm_config, "sudo apt update && sudo apt upgrade -y")
-        if "0 upgraded, 0 newly installed" in apt_upgrade_output or "0 to upgrade, 0 to newly install" in apt_upgrade_output or "0 packages upgraded" in apt_upgrade_output:
-             return {"status": "no_upgrades_applied", "package_manager": "apt", "details": "No new packages were upgraded or installed by apt. System was already up-to-date or no new upgrades were available."}
-        return {"status": "success", "package_manager": "apt", "details": apt_upgrade_output}
-    except HTTPException as e:
-        logging.error(f"Failed to apply upgrades on {vm_config.ip_address} using apt: {e.detail}")
-        raise HTTPException(status_code=500, detail=f"Failed to apply upgrades on {vm_config.ip_address} using apt: {e.detail}")
-    except Exception as e:
-        logging.error(f"An unexpected error occurred during apt upgrade application: {e}")
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during apt upgrade application: {e}")
+            connect.Disconnect(service_instance)
 
 @app.get("/esxi/list_powered_on_vms")
 async def list_powered_on_vms():
