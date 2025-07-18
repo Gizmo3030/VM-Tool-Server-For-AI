@@ -248,4 +248,41 @@ You can now interact with your chatbot naturally. The LLM will determine which t
     *   Check the console output of your `uvicorn` server for detailed Python tracebacks.
     *   Increase `logging.basicConfig(level=logging.DEBUG)` in `vm_update_tool_server.py` for more verbose logs.
 
----
+## Running as a Systemd Service (Ubuntu)
+
+You can easily install and run the VM Update Tool Server as a background service using the provided `setup.sh` script. This will set up the app to start automatically on boot and manage it with `systemctl`.
+
+### Steps:
+
+1. **Make the script executable:**
+    ```bash
+    chmod +x setup.sh
+    ```
+
+2. **Run the setup script as root (or with sudo):**
+    ```bash
+    sudo ./setup.sh
+    ```
+    - The script will prompt you for the absolute path to your application’s root directory (where `vm_update_tool_server.py` is located).
+    - It will create a dedicated system user, copy the app files to `/opt/vm-update-tool`, set up a Python virtual environment, install dependencies, and create a systemd service.
+
+3. **Service Management:**
+    - **Check status:**
+        ```bash
+        sudo systemctl status vm-update-tool.service
+        ```
+    - **View logs:**
+        ```bash
+        sudo journalctl -u vm-update-tool.service -f
+        ```
+    - **Restart the service:**
+        ```bash
+        sudo systemctl restart vm-update-tool.service
+        ```
+
+4. **Access the API:**
+    - By default, the server will be running on `http://0.0.0.0:8000` (all interfaces, port 8000).
+
+**Note:**  
+- The script will create a system user `vmupdateuser` and install the app in `/opt/vm-update-tool`.
+- You can edit the `setup.sh` script to customize variables if needed.
