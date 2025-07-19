@@ -1,39 +1,100 @@
 # This workflow will install Python dependencies, run tests and lint with a single version of Python
 # For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
 
-name: Python application
+name: Python application CI
 
 on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main" ] # This ensures it runs on PRs
 
 permissions:
   contents: read
 
 jobs:
-  build:
-
+  build_and_test: # Renamed job for clarity
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
+
     - name: Set up Python 3.10
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v5 # Recommended to use v5 for caching and latest features
       with:
         python-version: "3.10"
+        cache: 'pip' # Cache pip dependencies for faster builds
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install flake8 pytest
+        # Install linting and testing tools
+        pip install flake8 pytest httpx # httpx is needed for API tests
+        # Install application dependencies
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        # Install dev dependencies if exists (e.g., uvicorn, which might be here)
+        if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+
+
     - name: Lint with flake8
       run: |
         # stop the build if there are Python syntax errors or undefined names
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
         # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-    - name: Test with pytest
+
+    - name: Start Uvicorn server in background
       run: |
-        pytest
+        echo "Starting Uvicorn server..."
+        mkdir -p ./.run_logs # Create directory for logs
+        # Start Uvicorn, redirect stdout/stderr to a log file, and run in background
+        # IMPORTANT: Make sure 'vm_update_tool_server.py' is in the root, or adjust path.
+        nohup uvicorn vm_update_tool_server:app --host 0.0.0.0 --port 8000 > ./.run_logs/uvicorn.log 2>&1 &
+        echo "Uvicorn server started."
+        sleep 5 # Give Uvicorn a bit more time to fully initialize and bind to the port
+
+    - name: Wait for Uvicorn server to be ready and diagnose if not
+      id: wait_for_server_and_diagnose # Assign an ID for reference
+      run: |
+        echo "Waiting for Uvicorn server to become available on port 8000..."
+        MAX_RETRIES=30 # Try for up to 60 seconds (30 retries * 2 seconds sleep)
+
+        for i in $(seq 1 $MAX_RETRIES); do
+          echo "Attempt $i/$MAX_RETRIES: Checking http://localhost:8000 with curl..."
+          # Use 'curl -s -f' to silently succeed on HTTP status codes <= 399,
+          # and fail silently for other errors (like connection refused)
+          if curl -s -f http://localhost:8000 > /dev/null; then
+            echo "Uvicorn server is up and responsive!"
+            exit 0 # Success, exit this step
+          fi
+          echo "Still waiting..."
+          sleep 2
+        done
+
+        echo "--- DIAGNOSTIC: Uvicorn server did not start in time or is not accessible. ---"
+        echo "--- Uvicorn Log (./.run_logs/uvicorn.log) ---"
+        cat ./.run_logs/uvicorn.log || echo "uvicorn.log not found or empty."
+
+        echo "--- Active Processes (ps aux) ---"
+        ps aux
+
+        echo "--- Network Listening Ports on 8000 (lsof -i :8000) ---"
+        sudo lsof -i :8000 || echo "lsof not found or nothing listening on port 8000."
+
+        exit 1 # Fail this step if the server never became ready
+
+
+    - name: Run API functional tests with Pytest
+      # This step will only run if the 'wait_for_server_and_diagnose' step succeeded.
+      run: |
+        # IMPORTANT: Ensure your 'tests/test_api_endpoints.py' includes the mocking
+        # for external systems (ESXi, SSH) as discussed previously.
+        pytest tests/test_api_endpoints.py
+
+    - name: Upload Uvicorn Log (on failure for debugging)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: uvicorn-server-logs
+        path: ./.run_logs/uvicorn.log
+        retention-days: 5 # Keep logs for 5 days
