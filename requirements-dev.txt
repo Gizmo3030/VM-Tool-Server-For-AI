@@ -1,0 +1,4 @@
+# requirements-dev.txt
+uvicorn
+pytest
+httpx # Used for making HTTP requests to the running API

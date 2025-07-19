@@ -142,10 +142,10 @@ def load_vm_defaults() -> dict:
 @app.post("/vm/check_upgrades")
 async def check_vm_upgrades(vm_config: VMConfig):
     """
-    Checks for available package upgrades on a specified Ubuntu Linux VM using apt.
+    Checks for available package upgrades and update on a specified Ubuntu Linux VM using apt.
     """
     vm_defaults = load_vm_defaults()
-    logging.info(f"Checking for upgrades on Ubuntu VM: {vm_config.ip_address} (forcing username '{vm_defaults['default_vm_username']}') using apt.")
+    logging.info(f"Checking for upgrades and update on Ubuntu VM: {vm_config.ip_address} (forcing username '{vm_defaults['default_vm_username']}') using apt.")
 
     # Force username from config
     vm_config.username = vm_defaults["default_vm_username"]
@@ -175,10 +175,10 @@ async def check_vm_upgrades(vm_config: VMConfig):
 @app.post("/vm/apply_upgrades")
 async def apply_vm_upgrades(vm_config: VMConfig):
     """
-    Applies all available package upgrades on a specified Ubuntu Linux VM using apt.
+    Applies all available package upgrades and update on a specified Ubuntu Linux VM using apt.
     """
     vm_defaults = load_vm_defaults()
-    logging.info(f"Applying upgrades on Ubuntu VM: {vm_config.ip_address} (forcing username '{vm_defaults['default_vm_username']}') using apt.")
+    logging.info(f"Applying upgrades and update on Ubuntu VM: {vm_config.ip_address} (forcing username '{vm_defaults['default_vm_username']}') using apt.")
 
     # Force username from config
     vm_config.username = vm_defaults["default_vm_username"]
